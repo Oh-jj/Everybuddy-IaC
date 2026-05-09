@@ -72,3 +72,9 @@ variable "db_instance_class" {
   type        = string
   default     = "db.t3.micro"
 }
+
+variable "gpu_server_cidrs" {
+  description = "External GPU server CIDRs allowed to push logs to Loki (port 3100)"
+  type        = list(string)
+  default     = ["112.220.79.222/32"]
+}
