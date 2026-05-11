@@ -19,7 +19,7 @@ variable "environment" {
 variable "backend_instance_type" {
   description = "EC2 instance type for backend server"
   type        = string
-  default     = "t3.small"
+  default     = "t3.medium"
 }
 
 variable "monitoring_instance_type" {
@@ -31,7 +31,7 @@ variable "monitoring_instance_type" {
 variable "bastion_instance_type" {
   description = "EC2 instance type for Bastion server"
   type        = string
-  default     = "t3.nano"
+  default     = "t3.micro"
 }
 
 variable "domain_name" {
