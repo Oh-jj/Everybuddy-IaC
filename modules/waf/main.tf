@@ -33,10 +33,59 @@ resource "aws_wafv2_web_acl" "main" {
     }
   }
 
-  # ── Rule 2: Common Rule Set (OWASP Top 10) ─────────────────
+  # ── Rule 2: 번역 엔드포인트 허용 (CommonRuleSet SizeRestrictions 우회) ──
+  # /api/v1/translate/speech : m4a 파일 업로드 (8KB 초과)
+  # /api/v1/translate/text   : 긴 텍스트 번역 (최대 ~100KB)
+  rule {
+    name     = "AllowTranslateEndpoints"
+    priority = 2
+
+    action {
+      allow {}
+    }
+
+    statement {
+      or_statement {
+        statement {
+          byte_match_statement {
+            search_string = "/api/v1/translate/speech"
+            field_to_match {
+              uri_path {}
+            }
+            text_transformation {
+              priority = 0
+              type     = "NONE"
+            }
+            positional_constraint = "STARTS_WITH"
+          }
+        }
+        statement {
+          byte_match_statement {
+            search_string = "/api/v1/translate/text"
+            field_to_match {
+              uri_path {}
+            }
+            text_transformation {
+              priority = 0
+              type     = "NONE"
+            }
+            positional_constraint = "STARTS_WITH"
+          }
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AllowTranslateEndpoints"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # ── Rule 3: Common Rule Set (OWASP Top 10) ─────────────────
   rule {
     name     = "AWSManagedRulesCommonRuleSet"
-    priority = 2
+    priority = 3
 
     override_action {
       none {}
@@ -56,10 +105,10 @@ resource "aws_wafv2_web_acl" "main" {
     }
   }
 
-  # ── Rule 3: Known Bad Inputs (PHP, Log4j, ThinkPHP 등) ─────
+  # ── Rule 4: Known Bad Inputs (PHP, Log4j, ThinkPHP 등) ─────
   rule {
     name     = "AWSManagedRulesKnownBadInputsRuleSet"
-    priority = 3
+    priority = 4
 
     override_action {
       none {}

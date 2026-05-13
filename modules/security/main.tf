@@ -134,6 +134,17 @@ resource "aws_security_group_rule" "monitoring_loki" {
   security_group_id        = aws_security_group.monitoring.id
 }
 
+resource "aws_security_group_rule" "monitoring_loki_from_gpu" {
+  count             = length(var.gpu_server_cidrs) > 0 ? 1 : 0
+  type              = "ingress"
+  description       = "Loki push endpoint from external GPU server"
+  from_port         = 3100
+  to_port           = 3100
+  protocol          = "tcp"
+  cidr_blocks       = var.gpu_server_cidrs
+  security_group_id = aws_security_group.monitoring.id
+}
+
 resource "aws_security_group_rule" "monitoring_egress" {
   type              = "egress"
   description       = "Allow all outbound traffic"

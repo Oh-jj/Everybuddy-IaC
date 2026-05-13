@@ -19,7 +19,7 @@ variable "environment" {
 variable "backend_instance_type" {
   description = "EC2 instance type for backend server"
   type        = string
-  default     = "t3.small"
+  default     = "t3.medium"
 }
 
 variable "monitoring_instance_type" {
@@ -31,7 +31,7 @@ variable "monitoring_instance_type" {
 variable "bastion_instance_type" {
   description = "EC2 instance type for Bastion server"
   type        = string
-  default     = "t3.nano"
+  default     = "t3.micro"
 }
 
 variable "domain_name" {
@@ -71,4 +71,10 @@ variable "db_instance_class" {
   description = "RDS instance class"
   type        = string
   default     = "db.t3.micro"
+}
+
+variable "gpu_server_cidrs" {
+  description = "External GPU server CIDRs allowed to push logs to Loki (port 3100)"
+  type        = list(string)
+  default     = ["112.220.79.222/32"]
 }
