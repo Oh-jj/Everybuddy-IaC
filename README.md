@@ -4,11 +4,11 @@ AWS 기반 everybuddy 서비스 인프라를 Terraform으로 관리하는 레포
 
 ---
 
-## 최신 패치 — v2.8.0
+## 최신 패치 — v2.9.0
 
-**날짜:** 2026-05-09 · **브랜치:** `dev`
+**날짜:** 2026-05-13 · **브랜치:** `dev`
 
-🔧 외부 GPU 서버에서 Loki(3100)로 로그 푸시가 차단되던 문제 해결 → `monitoring_loki_from_gpu` 보안그룹 규칙 추가, `gpu_server_cidrs` 변수로 IP 관리
+🔧 Bastion(t3.nano→t3.micro) · Private Backend(t3.small→t3.medium) 인스턴스 스펙 상향 / WAF `AllowTranslateEndpoints` 규칙 추가 — 번역 API(/speech, /text)를 CommonRuleSet Body 크기 검사 이전에 명시적 허용
 
 > 전체 변경 이력은 [docs/](./docs/) 참고
 
@@ -31,7 +31,7 @@ AWS 기반 everybuddy 서비스 인프라를 Terraform으로 관리하는 레포
    │   ALB            │    │  Bastion EC2         │
    │  everybuddy-alb  │    │  public-b / AZ-b     │
    │  (internet-facing│    │                      │
-   │   AZ-a + AZ-b)  │    │  t3.nano             │
+   │   AZ-a + AZ-b)  │    │  t3.micro            │
    └────────┬────────┘    └──────────┬──────────┘
             │                        │
      HTTP:8080                 SSH ProxyJump
@@ -42,7 +42,7 @@ AWS 기반 everybuddy 서비스 인프라를 Terraform으로 관리하는 레포
    │         10.0.11.0/24 (AZ-a)             │
    │                                          │
    │   EC2 everybuddy-private-backend         │
-   │   t3.small                              │
+   │   t3.medium                             │
    │   Spring Boot :8080                      │
    │   Node Exporter :9100                    │
    │   Promtail → Loki                        │
@@ -87,9 +87,9 @@ AWS 기반 everybuddy 서비스 인프라를 Terraform으로 관리하는 레포
 
 | 이름                       | 타입     | IP      | 서브넷            | 역할                         |
 | -------------------------- | -------- | ------- | ----------------- | ---------------------------- |
-| everybuddy-private-backend | t3.small | private | private-app-a     | Spring Boot API 서버         |
-| everybuddy-monitoring      | t3.micro | public  | public-monitoring | Grafana / Prometheus / Loki  |
-| everybuddy-bastion         | t3.nano  | public  | public-b          | SSH 접근 및 CI/CD 게이트웨이 |
+| everybuddy-private-backend | t3.medium | private | private-app-a     | Spring Boot API 서버         |
+| everybuddy-monitoring      | t3.micro  | public  | public-monitoring | Grafana / Prometheus / Loki  |
+| everybuddy-bastion         | t3.micro  | public  | public-b          | SSH 접근 및 CI/CD 게이트웨이 |
 
 ### 네트워크
 
@@ -142,7 +142,8 @@ modules/
 ├── storage/      # S3
 ├── database/     # RDS, DB Subnet Group
 ├── dns/          # Route53 Hosted Zone
-└── alb/          # ALB, ACM, Target Group, Listeners, Route53 A Record
+├── alb/          # ALB, ACM, Target Group, Listeners, Route53 A Record
+└── waf/          # WAF v2 (IP Reputation, AllowTranslate, CommonRuleSet, KnownBadInputs)
 ```
 
 ---
@@ -165,6 +166,7 @@ Push to main
 
 | 버전                       | 날짜       | 내용                                   |
 | -------------------------- | ---------- | -------------------------------------- |
+| [v2.9.0](./docs/v2.9.0.md) | 2026-05-13 | 인스턴스 스펙 상향 + WAF 번역 엔드포인트 허용 |
 | [v2.8.0](./docs/v2.8.0.md) | 2026-05-09 | 외부 GPU 서버 → Loki 로그 수집 허용    |
 | [v2.7.0](./docs/v2.7.0.md) | 2026-04-30 | WAF(Web Application Firewall) 추가     |
 | [v2.6.1](./docs/v2.6.1.md) | 2026-03-18 | 보안: .claude/ gitignore 처리          |
