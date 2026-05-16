@@ -3,6 +3,12 @@ variable "project_name" {
   type        = string
 }
 
+variable "aws_region" {
+  description = "AWS region (S3 VPC Endpoint service name에 사용)"
+  type        = string
+  default     = "ap-southeast-1"
+}
+
 variable "vpc_cidr" {
   description = "CIDR block for VPC"
   type        = string

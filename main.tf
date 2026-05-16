@@ -12,6 +12,7 @@ provider "aws" {
 module "networking" {
   source       = "./modules/networking"
   project_name = var.project_name
+  aws_region   = var.aws_region
 
   public_subnets = {
     backend    = { cidr = "10.0.1.0/24", az = "ap-southeast-1a" }
