@@ -4,11 +4,11 @@ AWS 기반 everybuddy 서비스 인프라를 Terraform으로 관리하는 레포
 
 ---
 
-## 최신 패치 — v2.9.0
+## 최신 패치 — v2.10.0
 
-**날짜:** 2026-05-13 · **브랜치:** `dev`
+**날짜:** 2026-05-16 · **브랜치:** `dev`
 
-🔧 Bastion(t3.nano→t3.micro) · Private Backend(t3.small→t3.medium) 인스턴스 스펙 상향 / WAF `AllowTranslateEndpoints` 규칙 추가 — 번역 API(/speech, /text)를 CommonRuleSet Body 크기 검사 이전에 명시적 허용
+🛡️ WAF Rate-Based Rule(200건/5분) · Anonymous IP List 추가로 봇 차단 강화 / S3 VPC Gateway Endpoint 추가로 NAT GW 데이터 처리 비용 절감
 
 > 전체 변경 이력은 [docs/](./docs/) 참고
 
@@ -51,7 +51,9 @@ AWS 기반 everybuddy 서비스 인프라를 Terraform으로 관리하는 레포
         ┌──────┴──────┐
         │             │
     MySQL:3306    NAT GW → 인터넷
-        │         (DockerHub, S3, Firebase)
+        │         (DockerHub, Firebase)
+        │
+    S3 Endpoint → S3 (무료, NAT GW 우회)
         ▼
    ┌──────────────────────────┐
    │  Private DB Subnet       │
@@ -164,9 +166,10 @@ Push to main
 
 ## 패치 이력
 
-| 버전                       | 날짜       | 내용                                   |
-| -------------------------- | ---------- | -------------------------------------- |
-| [v2.9.0](./docs/v2.9.0.md) | 2026-05-13 | 인스턴스 스펙 상향 + WAF 번역 엔드포인트 허용 |
+| 버전                         | 날짜       | 내용                                          |
+| ---------------------------- | ---------- | --------------------------------------------- |
+| [v2.10.0](./docs/v2.10.0.md) | 2026-05-16 | 봇 차단 강화 + S3 VPC Endpoint (NAT GW 절감) |
+| [v2.9.0](./docs/v2.9.0.md)   | 2026-05-13 | 인스턴스 스펙 상향 + WAF 번역 엔드포인트 허용 |
 | [v2.8.0](./docs/v2.8.0.md) | 2026-05-09 | 외부 GPU 서버 → Loki 로그 수집 허용    |
 | [v2.7.0](./docs/v2.7.0.md) | 2026-04-30 | WAF(Web Application Firewall) 추가     |
 | [v2.6.1](./docs/v2.6.1.md) | 2026-03-18 | 보안: .claude/ gitignore 처리          |
