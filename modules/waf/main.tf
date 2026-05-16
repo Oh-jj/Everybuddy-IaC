@@ -10,6 +10,29 @@ resource "aws_wafv2_web_acl" "main" {
     allow {}
   }
 
+  # ── Rule 0: Rate Limit (단일 IP 200건/5분 초과 시 차단) ────
+  rule {
+    name     = "RateLimitPerIP"
+    priority = 0
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit              = 200
+        aggregate_key_type = "IP"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "RateLimitPerIP"
+      sampled_requests_enabled   = true
+    }
+  }
+
   # ── Rule 1: IP Reputation (봇, 스캐너, 악성 IP 차단) ──────
   rule {
     name     = "AWSManagedRulesAmazonIpReputationList"
@@ -124,6 +147,29 @@ resource "aws_wafv2_web_acl" "main" {
     visibility_config {
       cloudwatch_metrics_enabled = true
       metric_name                = "KnownBadInputs"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # ── Rule 5: Anonymous IP (VPN, 프록시, Tor 출구 노드 차단) ─
+  rule {
+    name     = "AWSManagedRulesAnonymousIpList"
+    priority = 5
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesAnonymousIpList"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AnonymousIpList"
       sampled_requests_enabled   = true
     }
   }
