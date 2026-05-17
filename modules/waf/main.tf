@@ -60,6 +60,7 @@ resource "aws_wafv2_web_acl" "main" {
   # /api/v1/translate/speech : m4a 파일 업로드 (8KB 초과)
   # /api/v1/translate/text   : 긴 텍스트 번역 (최대 ~100KB)
   # /api/v1/users/me         : 프로필 이미지 업로드 (JPEG/PNG 바이너리 false positive)
+  # /api/v1/messages         : 채팅 파일 전송 (이미지, 비디오, 오디오, 문서 바이너리 false positive)
   rule {
     name     = "AllowBinaryUploadEndpoints"
     priority = 2
@@ -99,6 +100,19 @@ resource "aws_wafv2_web_acl" "main" {
         statement {
           byte_match_statement {
             search_string = "/api/v1/users/me"
+            field_to_match {
+              uri_path {}
+            }
+            text_transformation {
+              priority = 0
+              type     = "NONE"
+            }
+            positional_constraint = "STARTS_WITH"
+          }
+        }
+        statement {
+          byte_match_statement {
+            search_string = "/api/v1/messages"
             field_to_match {
               uri_path {}
             }
