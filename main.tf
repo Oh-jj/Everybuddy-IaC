@@ -139,6 +139,7 @@ module "database" {
   allowed_sg_ids = {
     backend         = module.security.backend_sg_id
     private_backend = module.security.private_backend_sg_id
+    bastion         = module.security.bastion_sg_id
   }
 
   db_name           = var.db_name
