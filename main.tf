@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # Provider
 # ============================================================
 provider "aws" {
@@ -150,10 +150,27 @@ module "database" {
 
 # ============================================================
 # WAF
-# AWS WAF v2 - ALB ?곌껐 (遊??ㅼ틦??李⑤떒, OWASP Top 10)
+# AWS WAF v2 - ALB 연결 (관리형 규칙, OWASP Top 10)
 # ============================================================
 module "waf" {
   source       = "./modules/waf"
   project_name = var.project_name
   alb_arn      = module.alb.alb_arn
+}
+
+# ============================================================
+# Bedrock Agent
+# laurel GPU 서버 이상 감지 → Bedrock 분석 → Slack 알림
+# ============================================================
+module "bedrock_agent" {
+  source       = "./modules/bedrock_agent"
+  project_name = var.project_name
+  aws_region   = var.aws_region
+
+  slack_webhook_url     = var.slack_webhook_url
+  prometheus_private_ip = module.compute.monitoring_private_ip
+
+  # private-app-a 서브넷 (NAT GW 연결 — Bedrock/Slack outbound 가능)
+  private_subnet_ids = [module.networking.private_app_subnet_ids["a"]]
+  lambda_sg_id       = module.security.lambda_gpu_monitor_sg_id
 }

@@ -27,3 +27,6 @@ awscliv2.zip
 # Serverkey
 serverkey
 serverkey.pub
+
+# Lambda build artifacts
+.lambda_builds/

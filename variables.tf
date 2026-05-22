@@ -78,3 +78,12 @@ variable "gpu_server_cidrs" {
   type        = list(string)
   default     = ["112.220.79.222/32"]
 }
+
+# ── Bedrock Agent ────────────────────────────────────────────
+# 비밀번호와 동일하게 환경변수로 주입
+# 실행 전: export TF_VAR_slack_webhook_url="https://hooks.slack.com/services/..."
+variable "slack_webhook_url" {
+  description = "Slack Incoming Webhook URL (GPU 모니터링 알림 — git에 절대 저장 금지)"
+  type        = string
+  sensitive   = true
+}
