@@ -10,9 +10,14 @@ variable "aws_region" {
 }
 
 variable "slack_webhook_url" {
-  description = "Slack Incoming Webhook URL (SSM SecureString으로 저장됨 — git에 절대 노출 금지)"
+  description = "Slack Incoming Webhook URL (SSM SecureString으로 저장됨 — git 절대 노출 금지)"
   type        = string
   sensitive   = true
+}
+
+variable "existing_role_arn" {
+  description = "관리자가 사전 생성한 Lambda 실행 IAM Role ARN"
+  type        = string
 }
 
 variable "prometheus_private_ip" {

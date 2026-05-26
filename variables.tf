@@ -87,3 +87,9 @@ variable "slack_webhook_url" {
   type        = string
   sensitive   = true
 }
+
+variable "existing_role_arn" {
+  description = "관리자가 사전 생성한 Lambda 실행 IAM Role ARN"
+  type        = string
+  # 실행 전: export TF_VAR_existing_role_arn="arn:aws:iam::710585551723:role/everybuddy-gpu-monitor-role"
+}

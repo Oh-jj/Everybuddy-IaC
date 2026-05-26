@@ -236,15 +236,18 @@ def build_prompt(m: dict, issues: list[str]) -> str:
         vram = m["vrams"].get(gid, {})
         pwr  = m["powers"].get(gid)
 
-        temp_str = (
+        temp_str  = (
             f"{cur:.1f}°C" + (f"(+{tr:.1f}/분)" if tr and tr > 0 else "")
             if cur is not None else "N/A"
         )
+        util_str  = f"{util:.1f}%" if util is not None else "N/A"
+        vram_pct  = vram.get("pct", 0)
+        vram_used = vram.get("used", 0)
+        vram_tot  = vram.get("total", 0)
+        vram_str  = f"{vram_pct:.1f}%({vram_used:.0f}/{vram_tot:.0f}MiB)" if vram else "N/A"
+        pwr_str   = f"{pwr:.0f}W" if pwr else "N/A"
         lines.append(
-            f"  GPU {gid}: 온도={temp_str}"
-            f" | 사용률={f'{util:.1f}%' if util is not None else 'N/A'}"
-            f" | VRAM={f'{vram.get(\"pct\",0):.1f}%({vram.get(\"used\",0):.0f}/{vram.get(\"total\",0):.0f}MiB)' if vram else 'N/A'}"
-            f" | 전력={f'{pwr:.0f}W' if pwr else 'N/A'}"
+            f"  GPU {gid}: 온도={temp_str} | 사용률={util_str} | VRAM={vram_str} | 전력={pwr_str}"
         )
 
     sm = m.get("sys_mem")

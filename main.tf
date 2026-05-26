@@ -168,6 +168,7 @@ module "bedrock_agent" {
   aws_region   = var.aws_region
 
   slack_webhook_url     = var.slack_webhook_url
+  existing_role_arn     = var.existing_role_arn
   prometheus_private_ip = module.compute.monitoring_private_ip
 
   # private-app-a 서브넷 (NAT GW 연결 — Bedrock/Slack outbound 가능)
