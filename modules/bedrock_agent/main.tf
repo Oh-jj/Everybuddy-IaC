@@ -1,6 +1,5 @@
 # ============================================================
 # SSM Parameter Store — Slack Webhook URL (SecureString)
-# git에 절대 저장하지 않고 AWS SSM에 암호화 저장
 # ============================================================
 resource "aws_ssm_parameter" "slack_webhook" {
   name        = "/${var.project_name}/slack/gpu-webhook"
@@ -14,7 +13,7 @@ resource "aws_ssm_parameter" "slack_webhook" {
 }
 
 # ============================================================
-# Lambda 배포 패키지 — archive_file로 Python 소스 zip
+# Lambda 배포 패키지
 # ============================================================
 data "archive_file" "gpu_monitor" {
   type        = "zip"
@@ -24,7 +23,6 @@ data "archive_file" "gpu_monitor" {
 
 # ============================================================
 # Lambda Function
-# IAM Role은 관리자가 사전 생성 → ARN 변수로 주입
 # ============================================================
 resource "aws_lambda_function" "gpu_monitor" {
   function_name = "${var.project_name}-gpu-monitor"
@@ -33,13 +31,12 @@ resource "aws_lambda_function" "gpu_monitor" {
   filename         = data.archive_file.gpu_monitor.output_path
   source_code_hash = data.archive_file.gpu_monitor.output_base64sha256
 
-  role        = var.existing_role_arn   # 관리자가 생성한 Role ARN 직접 주입
+  role        = var.existing_role_arn
   handler     = "lambda_function.lambda_handler"
   runtime     = "python3.12"
   timeout     = 60
   memory_size = 256
 
-  # VPC 내부 배치 → Prometheus private IP 접근 + NAT GW 경유 Bedrock/Slack 호출
   vpc_config {
     subnet_ids         = var.private_subnet_ids
     security_group_ids = [var.lambda_sg_id]

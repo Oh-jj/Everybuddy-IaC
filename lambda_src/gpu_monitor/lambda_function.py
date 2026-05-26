@@ -10,8 +10,8 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 # ── 환경 변수 ──────────────────────────────────────────────────────────────────
-PROMETHEUS_ENDPOINT = os.environ["PROMETHEUS_ENDPOINT"]   # http://10.0.2.x:9090
-SLACK_WEBHOOK_SSM   = os.environ["SLACK_WEBHOOK_SSM"]    # /everybuddy/slack/gpu-webhook
+PROMETHEUS_ENDPOINT = os.environ["PROMETHEUS_ENDPOINT"]
+SLACK_WEBHOOK_SSM   = os.environ["SLACK_WEBHOOK_SSM"]
 BEDROCK_MODEL_ID    = os.environ.get(
     "BEDROCK_MODEL_ID", "anthropic.claude-3-5-haiku-20241022-v1:0"
 )
@@ -29,7 +29,7 @@ THRESHOLDS = {
     "temp_trend_warn":   1.5,   # °C/분 — 급상승 판정
 }
 
-# ── AWS 클라이언트 (Lambda 컨테이너 재사용 — 초기화 1회) ─────────────────────
+# ── AWS 클라이언트 ────────────────────────────────────────────────────────────
 ssm     = boto3.client("ssm",             region_name=BEDROCK_REGION)
 bedrock = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 
@@ -46,7 +46,6 @@ def get_slack_url() -> str:
 
 # ── Prometheus 헬퍼 ───────────────────────────────────────────────────────────
 def prom_range(query: str, minutes: int = 10, step: str = "60s") -> list:
-    """range_query — 트렌드 계산용"""
     try:
         end   = datetime.now(timezone.utc)
         start = end - timedelta(minutes=minutes)
@@ -66,7 +65,6 @@ def prom_range(query: str, minutes: int = 10, step: str = "60s") -> list:
 
 
 def prom_instant(query: str) -> list:
-    """instant query — 현재값 조회"""
     try:
         params = urllib.parse.urlencode({"query": query})
         url = f"{PROMETHEUS_ENDPOINT}/api/v1/query?{params}"
@@ -79,17 +77,15 @@ def prom_instant(query: str) -> list:
 
 
 def gpu_id_from(metric: dict) -> str:
-    """DCGM 라벨에서 GPU ID 추출 (드라이버 버전마다 라벨 키 다를 수 있음)"""
     return metric.get("gpu") or metric.get("GPU_I_ID") or metric.get("uuid", "?")
 
 
 def calc_trend(result_item: dict) -> float | None:
-    """values 배열에서 선형 기울기(단위/분) 계산"""
     try:
         vals = result_item["values"]
         if len(vals) < 2:
             return None
-        dt = (vals[-1][0] - vals[0][0]) / 60  # seconds → minutes
+        dt = (vals[-1][0] - vals[0][0]) / 60
         return (float(vals[-1][1]) - float(vals[0][1])) / dt if dt else None
     except Exception:
         return None
@@ -99,7 +95,7 @@ def calc_trend(result_item: dict) -> float | None:
 def collect() -> dict:
     m: dict = {}
 
-    # ── GPU 온도 (range: 트렌드 포함) ─────────────────────────
+    # GPU 온도 (range: 트렌드 포함)
     m["temps"] = {}
     for r in prom_range("DCGM_FI_DEV_GPU_TEMP{job='gpu-dcgm'}"):
         gid = gpu_id_from(r["metric"])
@@ -108,13 +104,13 @@ def collect() -> dict:
             "trend":   calc_trend(r),
         }
 
-    # ── GPU 사용률 (instant) ───────────────────────────────────
+    # GPU 사용률 (instant)
     m["utils"] = {}
     for r in prom_instant("DCGM_FI_DEV_GPU_UTIL{job='gpu-dcgm'}"):
         gid = gpu_id_from(r["metric"])
         m["utils"][gid] = float(r["value"][1])
 
-    # ── VRAM (instant, MiB 단위) ───────────────────────────────
+    # VRAM (instant, MiB 단위)
     m["vrams"] = {}
     for r in prom_instant("DCGM_FI_DEV_FB_USED{job='gpu-dcgm'}"):
         gid = gpu_id_from(r["metric"])
@@ -123,17 +119,17 @@ def collect() -> dict:
         gid = gpu_id_from(r["metric"])
         m["vrams"].setdefault(gid, {})["free"] = float(r["value"][1])
     for gid, v in m["vrams"].items():
-        total    = v.get("used", 0) + v.get("free", 0)
+        total      = v.get("used", 0) + v.get("free", 0)
         v["total"] = total
         v["pct"]   = v["used"] / total * 100 if total else 0
 
-    # ── 전력 (instant) ────────────────────────────────────────
+    # 전력 (instant)
     m["powers"] = {}
     for r in prom_instant("DCGM_FI_DEV_POWER_USAGE{job='gpu-dcgm'}"):
         gid = gpu_id_from(r["metric"])
         m["powers"][gid] = float(r["value"][1])
 
-    # ── 시스템 메모리 ─────────────────────────────────────────
+    # 시스템 메모리
     avail_r = prom_instant("node_memory_MemAvailable_bytes{job='gpu-node-exporter'}")
     total_r = prom_instant("node_memory_MemTotal_bytes{job='gpu-node-exporter'}")
     if avail_r and total_r:
@@ -147,7 +143,7 @@ def collect() -> dict:
     else:
         m["sys_mem"] = None
 
-    # ── Triton 추론 서버 (포트 미개방 시 available=False로 graceful 처리) ──
+    # Triton (포트 미개방 시 graceful 처리)
     req_r   = prom_instant("nv_inference_request_success{job='triton'}")
     queue_r = prom_instant("nv_inference_queue_duration_us{job='triton'}")
     if req_r or queue_r:
@@ -204,10 +200,9 @@ def detect(m: dict) -> tuple[list[str], str]:
         if pct is None:
             continue
         if pct >= T["vram_critical"]:
-            issues.append(
-                f"🔴 GPU {gid} VRAM 위험: {pct:.1f}%"
-                f" ({v.get('used', 0):.0f}/{v.get('total', 0):.0f} MiB)"
-            )
+            vram_used = v.get("used", 0)
+            vram_tot  = v.get("total", 0)
+            issues.append(f"🔴 GPU {gid} VRAM 위험: {pct:.1f}% ({vram_used:.0f}/{vram_tot:.0f} MiB)")
             bump("CRITICAL")
         elif pct >= T["vram_warn"]:
             issues.append(f"🟡 GPU {gid} VRAM 경고: {pct:.1f}%")
@@ -229,12 +224,12 @@ def build_prompt(m: dict, issues: list[str]) -> str:
     gpu_ids = sorted(set(list(m["temps"]) + list(m["utils"])))
     lines   = []
     for gid in gpu_ids:
-        td   = m["temps"].get(gid, {})
-        cur  = td.get("current")
-        tr   = td.get("trend")
-        util = m["utils"].get(gid)
-        vram = m["vrams"].get(gid, {})
-        pwr  = m["powers"].get(gid)
+        td    = m["temps"].get(gid, {})
+        cur   = td.get("current")
+        tr    = td.get("trend")
+        util  = m["utils"].get(gid)
+        vram  = m["vrams"].get(gid, {})
+        pwr   = m["powers"].get(gid)
 
         temp_str  = (
             f"{cur:.1f}°C" + (f"(+{tr:.1f}/분)" if tr and tr > 0 else "")
@@ -246,6 +241,7 @@ def build_prompt(m: dict, issues: list[str]) -> str:
         vram_tot  = vram.get("total", 0)
         vram_str  = f"{vram_pct:.1f}%({vram_used:.0f}/{vram_tot:.0f}MiB)" if vram else "N/A"
         pwr_str   = f"{pwr:.0f}W" if pwr else "N/A"
+
         lines.append(
             f"  GPU {gid}: 온도={temp_str} | 사용률={util_str} | VRAM={vram_str} | 전력={pwr_str}"
         )
@@ -308,8 +304,8 @@ def call_bedrock(prompt: str) -> str | None:
 
 # ── Slack 알림 ────────────────────────────────────────────────────────────────
 def send_slack(issues: list[str], severity: str, analysis: str | None, m: dict):
-    color = {"CRITICAL": "#FF0000", "WARNING": "#FFA500"}.get(severity, "#36a64f")
-    emoji = {"CRITICAL": "🚨",       "WARNING": "⚠️"}.get(severity, "✅")
+    color   = {"CRITICAL": "#FF0000", "WARNING": "#FFA500"}.get(severity, "#36a64f")
+    emoji   = {"CRITICAL": "🚨",       "WARNING": "⚠️"}.get(severity, "✅")
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     gpu_ids = sorted(set(list(m["temps"]) + list(m["utils"])))
@@ -330,10 +326,7 @@ def send_slack(issues: list[str], severity: str, analysis: str | None, m: dict):
             "blocks": [
                 {
                     "type": "header",
-                    "text": {
-                        "type": "plain_text",
-                        "text": f"{emoji} [GPU 모니터] laurel 이상 감지 — {severity}",
-                    },
+                    "text": {"type": "plain_text", "text": f"{emoji} [GPU 모니터] laurel 이상 감지 — {severity}"},
                 },
                 {
                     "type": "section",
@@ -365,10 +358,7 @@ def send_slack(issues: list[str], severity: str, analysis: str | None, m: dict):
                 },
                 {
                     "type": "context",
-                    "elements": [{
-                        "type": "mrkdwn",
-                        "text": "everybuddy · laurel GPU 모니터링 에이전트 · Claude 3.5 Haiku",
-                    }],
+                    "elements": [{"type": "mrkdwn", "text": "everybuddy · laurel GPU 모니터링 에이전트 · Claude 3.5 Haiku"}],
                 },
             ],
         }]
@@ -401,7 +391,7 @@ def lambda_handler(event, context):
         print("[INFO] 정상 범위 — Bedrock 호출 생략")
 
     return {
-        "severity":      sev,
-        "issue_count":   len(issues),
+        "severity":       sev,
+        "issue_count":    len(issues),
         "bedrock_called": sev != "NORMAL",
     }
