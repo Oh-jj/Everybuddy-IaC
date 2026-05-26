@@ -8,6 +8,11 @@ output "monitoring_public_ip" {
   value       = aws_instance.monitoring.public_ip
 }
 
+output "monitoring_private_ip" {
+  description = "Monitoring EC2 private IP (VPC 내부 통신용 — Prometheus 엔드포인트)"
+  value       = aws_instance.monitoring.private_ip
+}
+
 output "monitoring_public_dns" {
   description = "Monitoring EC2 public DNS"
   value       = aws_instance.monitoring.public_dns

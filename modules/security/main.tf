@@ -269,6 +269,31 @@ resource "aws_security_group_rule" "private_backend_actuator_prometheus" {
   security_group_id        = aws_security_group.private_backend.id
 }
 
+# ============================================================
+# Lambda Security Group — GPU 모니터링 에이전트 전용
+# Ingress: 불필요 (Lambda는 트리거 기반)
+# Egress:  전체 허용 (VPC 내 Prometheus + NAT GW 경유 Bedrock/Slack)
+# ============================================================
+resource "aws_security_group" "lambda_gpu_monitor" {
+  name        = "${var.project_name}-lambda-gpu-monitor-sg"
+  description = "Security group for GPU monitoring Lambda (egress-only)"
+  vpc_id      = var.vpc_id
+
+  tags = {
+    Name = "${var.project_name}-lambda-gpu-monitor-sg"
+  }
+}
+
+resource "aws_security_group_rule" "lambda_gpu_monitor_egress" {
+  type              = "egress"
+  description       = "Allow all outbound: Prometheus(VPC internal) + Bedrock/Slack(via NAT GW)"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.lambda_gpu_monitor.id
+}
+
 # Private Backend → Monitoring: Loki 로그 푸시 (3100)
 resource "aws_security_group_rule" "private_backend_to_loki" {
   type                     = "ingress"
