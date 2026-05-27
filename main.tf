@@ -175,3 +175,14 @@ module "bedrock_agent" {
   private_subnet_ids = [module.networking.private_app_subnet_ids["a"]]
   lambda_sg_id       = module.security.lambda_gpu_monitor_sg_id
 }
+
+# Lambda → 모니터링 서버 Loki(3100) 허용
+resource "aws_security_group_rule" "monitoring_loki_from_lambda" {
+  type                     = "ingress"
+  description              = "Loki from Lambda GPU monitor"
+  from_port                = 3100
+  to_port                  = 3100
+  protocol                 = "tcp"
+  source_security_group_id = module.security.lambda_gpu_monitor_sg_id
+  security_group_id        = module.security.monitoring_sg_id
+}

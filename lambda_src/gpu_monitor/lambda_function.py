@@ -1,9 +1,10 @@
 """
 everybuddy — laurel GPU 서버 모니터링 에이전트
-EventBridge 2분 주기 → Prometheus 조회 → 이상 감지 → Bedrock 분석 → Slack 알림
+EventBridge 2분 주기 → Prometheus/Loki 조회 → 이상 감지 → Bedrock 분석 → Slack 알림
 """
 import json
 import os
+import re
 import boto3
 import urllib.request
 import urllib.parse
@@ -11,9 +12,10 @@ from datetime import datetime, timedelta, timezone
 
 # ── 환경 변수 ──────────────────────────────────────────────────────────────────
 PROMETHEUS_ENDPOINT = os.environ["PROMETHEUS_ENDPOINT"]
+LOKI_ENDPOINT       = os.environ["LOKI_ENDPOINT"]
 SLACK_WEBHOOK_SSM   = os.environ["SLACK_WEBHOOK_SSM"]
 BEDROCK_MODEL_ID    = os.environ.get(
-    "BEDROCK_MODEL_ID", "anthropic.claude-3-5-haiku-20241022-v1:0"
+    "BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20240620-v1:0"
 )
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "ap-southeast-1")
 
@@ -91,6 +93,70 @@ def calc_trend(result_item: dict) -> float | None:
         return None
 
 
+# ── Loki 에러 로그 수집 ───────────────────────────────────────────────────────
+def deduplicate_logs(lines: list[str], max_lines: int = 20) -> list[str]:
+    """숫자/타임스탬프 제거 후 중복 패턴 묶기, 최대 N줄 반환"""
+    seen: dict[str, dict] = {}
+    for line in lines:
+        pattern = re.sub(r'\d+', 'N', line)
+        if pattern not in seen:
+            seen[pattern] = {"line": line, "count": 1}
+        else:
+            seen[pattern]["count"] += 1
+
+    result = []
+    for info in list(seen.values())[:max_lines]:
+        suffix = f" (×{info['count']})" if info["count"] > 1 else ""
+        result.append(info["line"] + suffix)
+    return result
+
+
+def query_loki_errors(minutes: int = 2, limit: int = 50) -> list[str]:
+    """Loki에서 최근 N분간 ERROR 이상 로그 수집"""
+    try:
+        now_ns   = int(datetime.now(timezone.utc).timestamp() * 1e9)
+        start_ns = now_ns - int(minutes * 60 * 1e9)
+
+        # Triton 컨테이너 재시작/크래시 패턴 포함
+        query = (
+            '{job=~".+"} |~ '
+            '"(?i)(error|critical|fatal|exception|oom|killed|traceback|panic|cuda|segfault'
+            '|failed to load|failed to create|server.*failed|restarting)"'
+        )
+        params = urllib.parse.urlencode({
+            "query":     query,
+            "start":     start_ns,
+            "end":       now_ns,
+            "limit":     limit,
+            "direction": "backward",
+        })
+        url = f"{LOKI_ENDPOINT}/loki/api/v1/query_range?{params}"
+        with urllib.request.urlopen(url, timeout=10) as r:
+            data = json.loads(r.read())
+
+        if data.get("status") != "success":
+            return []
+
+        lines = []
+        for stream in data["data"]["result"]:
+            labels    = stream.get("stream", {})
+            container = (
+                labels.get("container_name")
+                or labels.get("container")
+                or labels.get("job", "unknown")
+            )
+            for _, msg in stream.get("values", []):
+                msg = msg.strip()
+                if msg:
+                    lines.append(f"[{container}] {msg}")
+
+        return deduplicate_logs(lines)
+
+    except Exception as e:
+        print(f"[WARN] Loki 쿼리 실패: {e}")
+        return []
+
+
 # ── 메트릭 수집 ───────────────────────────────────────────────────────────────
 def collect() -> dict:
     m: dict = {}
@@ -155,6 +221,22 @@ def collect() -> dict:
     else:
         m["triton"] = {"available": False}
 
+    # VRAM 급락 감지 — 10분 내 10GB 이상 감소 시 모델 크래시로 판단
+    m["vram_drops"] = {}
+    for r in prom_range("DCGM_FI_DEV_FB_USED{job='gpu-dcgm'}", minutes=10, step="60s"):
+        gid  = gpu_id_from(r["metric"])
+        vals = r.get("values", [])
+        if len(vals) >= 2:
+            first_v = float(vals[0][1])
+            last_v  = float(vals[-1][1])
+            drop    = first_v - last_v   # 양수 = 감소량
+            if drop > 10_000:            # 10 GB 이상 감소
+                m["vram_drops"][gid] = {
+                    "from_mib": first_v,
+                    "to_mib":   last_v,
+                    "drop_mib": drop,
+                }
+
     return m
 
 
@@ -214,11 +296,33 @@ def detect(m: dict) -> tuple[list[str], str]:
         issues.append(f"🟡 시스템 메모리 경고: {sm['pct']:.1f}% (가용 {sm['avail_gb']:.1f}GB)")
         bump("WARNING")
 
+    # VRAM 급락 — 모델 크래시 또는 컨테이너 재시작 감지
+    for gid, vd in m.get("vram_drops", {}).items():
+        issues.append(
+            f"🔴 GPU {gid} VRAM 급락: {vd['from_mib']:.0f}→{vd['to_mib']:.0f} MiB"
+            f" (−{vd['drop_mib']:.0f} MiB) — Triton 모델 크래시 또는 컨테이너 재시작"
+        )
+        bump("CRITICAL")
+
+    # Triton 메트릭 소실 — 서버 다운 또는 재시작 중
+    if not m.get("triton", {}).get("available", True):
+        # VRAM이 정상 범위(>1GB)인 GPU가 없으면 Triton이 진짜 다운된 것으로 판단
+        any_vram_loaded = any(
+            v.get("used", 0) > 1000
+            for v in m.get("vrams", {}).values()
+        )
+        if not any_vram_loaded:
+            issues.append("🔴 Triton 서버 다운 — 메트릭 없음 + VRAM 비어 있음 (컨테이너 재시작 중)")
+            bump("CRITICAL")
+        else:
+            issues.append("⚠️ Triton 서버 메트릭 없음 — 재시작 중 또는 스크래핑 오류")
+            bump("WARNING")
+
     return issues, severity
 
 
-# ── Bedrock 프롬프트 ──────────────────────────────────────────────────────────
-def build_prompt(m: dict, issues: list[str]) -> str:
+# ── Bedrock 프롬프트 (메트릭 + 로그 통합) ────────────────────────────────────
+def build_metric_prompt(m: dict, issues: list[str], log_lines: list[str]) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     gpu_ids = sorted(set(list(m["temps"]) + list(m["utils"])))
@@ -259,12 +363,25 @@ def build_prompt(m: dict, issues: list[str]) -> str:
     )
 
     issue_str = "\n".join(issues) if issues else "없음"
+    log_str   = "\n".join(log_lines) if log_lines else "없음"
 
     return f"""당신은 GPU 서버 운영 전문가입니다. 아래 데이터를 분석하여 한국어로 간결하게 답하세요.
 
+=== 서버 환경 (참고) ===
+- 서버명: laurel (외부 온프레미스 GPU 서버)
+- GPU: NVIDIA Tesla V100-DGXS-32GB × 4 (GPU 0~3)
+- Triton Inference Server 컨테이너 (Docker, 2분마다 재시작 감지 체계 운영 중)
+  - gemma_s2tt : GPU 0 (Speech-to-Text 번역)
+  - gemma_v2tt : GPU 1 (Video-to-Text 번역)
+  - gemma_t2tt : GPU 2, 3 (Text-to-Text 번역, 인스턴스 2개)
+  - Supertonic_tts : CPU (TTS 합성)
+- 정상 VRAM: 모델 로드 시 GPU당 약 15~16 GB / 미로드(아이들) 시 약 400 MB
+- NVIDIA Driver 535 설치, 컨테이너 요구사항 560 이상 — "compatibility mode UNAVAILABLE" 경고는 정상 출력됨 (동작에는 영향 없음)
+- 알려진 이슈: strict_readiness=1 설정으로 모델 일부 로드 실패 시 Triton 전체 재시작
+
 === laurel GPU 서버 상태 ({now}) ===
 
-[GPU 현황 — NVIDIA V100 x4]
+[GPU 현황]
 {chr(10).join(lines) or "  데이터 없음"}
 
 [시스템 메모리]
@@ -276,11 +393,41 @@ def build_prompt(m: dict, issues: list[str]) -> str:
 [감지된 이상 징후]
 {issue_str}
 
+[동시점 에러 로그]
+{log_str}
+
 === 분석 요청 ===
-1. 현재 상황 심각도를 한 줄로 요약하세요.
-2. 이상 원인을 2~3줄로 추론하세요.
-3. 즉시 취할 조치를 번호 목록으로 최대 3개 제시하세요.
-4. 향후 30분 내 예상 상황을 한 줄로 예측하세요.
+1. 현재 상황을 한 줄로 요약하세요. (심각도 포함)
+2. 위 환경 정보를 참고하여 이상 원인을 2~3줄로 정확히 추론하세요.
+3. 즉시 취할 조치를 번호 목록으로 최대 3개 제시하세요. (구체적인 명령어 포함 권장)
+4. 조치하지 않을 경우 30분 내 예상 상황을 한 줄로 예측하세요.
+
+불필요한 설명 없이 핵심만 작성하세요."""
+
+
+# ── Bedrock 프롬프트 (에러 로그 단독) ────────────────────────────────────────
+def build_log_prompt(log_lines: list[str]) -> str:
+    now     = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    log_str = "\n".join(log_lines)
+
+    return f"""당신은 GPU 서버 운영 전문가입니다. 아래 에러 로그를 분석하여 한국어로 간결하게 답하세요.
+
+=== 서버 환경 (참고) ===
+- 서버명: laurel (외부 온프레미스 GPU 서버)
+- GPU: NVIDIA Tesla V100-DGXS-32GB × 4
+- Triton Inference Server (Docker 컨테이너) 운영 중
+  - gemma_s2tt(GPU0), gemma_v2tt(GPU1), gemma_t2tt(GPU2,3), Supertonic_tts(CPU)
+- NVIDIA Driver 535, 컨테이너 요구 560 이상 — 매 시작 시 "compatibility mode UNAVAILABLE" 경고는 정상
+- strict_readiness=1: 모델 하나라도 실패 시 Triton 전체가 재시작됨
+
+=== laurel GPU 서버 에러 로그 ({now}) ===
+
+{log_str}
+
+=== 분석 요청 ===
+1. 어떤 컴포넌트에서 발생한 에러인지 한 줄로 설명하세요.
+2. 위 환경 정보를 참고하여 에러 원인을 2~3줄로 정확히 추론하세요.
+3. 즉시 취할 조치를 번호 목록으로 최대 3개 제시하세요. (구체적인 명령어 포함 권장)
 
 불필요한 설명 없이 핵심만 작성하세요."""
 
@@ -302,13 +449,13 @@ def call_bedrock(prompt: str) -> str | None:
         return None
 
 
-# ── Slack 알림 ────────────────────────────────────────────────────────────────
-def send_slack(issues: list[str], severity: str, analysis: str | None, m: dict):
+# ── Slack 알림 — 메트릭 이상 ─────────────────────────────────────────────────
+def send_slack_metric(issues: list[str], severity: str, analysis: str | None, m: dict):
     color   = {"CRITICAL": "#FF0000", "WARNING": "#FFA500"}.get(severity, "#36a64f")
-    emoji   = {"CRITICAL": "🚨",       "WARNING": "⚠️"}.get(severity, "✅")
+    emoji   = {"CRITICAL": "🚨",      "WARNING": "⚠️"}.get(severity, "✅")
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    gpu_ids = sorted(set(list(m["temps"]) + list(m["utils"])))
+    gpu_ids   = sorted(set(list(m["temps"]) + list(m["utils"])))
     gpu_lines = []
     for gid in gpu_ids:
         cur  = m["temps"].get(gid, {}).get("current")
@@ -353,17 +500,64 @@ def send_slack(issues: list[str], severity: str, analysis: str | None, m: dict):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*🤖 Bedrock 분석*\n{analysis or '분석 불가 (Bedrock 오류)'}",
+                        "text": f"*🤖 Bedrock 분석*\n{analysis or '분석 불가'}",
                     },
                 },
                 {
                     "type": "context",
-                    "elements": [{"type": "mrkdwn", "text": "everybuddy · laurel GPU 모니터링 에이전트 · Claude 3.5 Haiku"}],
+                    "elements": [{"type": "mrkdwn", "text": "everybuddy · laurel GPU 모니터링 에이전트"}],
                 },
             ],
         }]
     }
+    _post_slack(payload)
 
+
+# ── Slack 알림 — 에러 로그 단독 ──────────────────────────────────────────────
+def send_slack_log(log_lines: list[str], analysis: str | None):
+    now_str  = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    log_text = "\n".join(log_lines[:10])
+
+    payload = {
+        "attachments": [{
+            "color": "#FF0000",
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": "🔴 [GPU 모니터] laurel 에러 로그 감지"},
+                },
+                {
+                    "type": "section",
+                    "fields": [
+                        {"type": "mrkdwn", "text": f"*시각*\n{now_str}"},
+                        {"type": "mrkdwn", "text": f"*감지 건수*\n{len(log_lines)}건"},
+                    ],
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "*📋 에러 로그*\n```" + log_text + "```",
+                    },
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*🤖 Bedrock 분석*\n{analysis or '분석 불가'}",
+                    },
+                },
+                {
+                    "type": "context",
+                    "elements": [{"type": "mrkdwn", "text": "everybuddy · laurel GPU 모니터링 에이전트"}],
+                },
+            ],
+        }]
+    }
+    _post_slack(payload)
+
+
+def _post_slack(payload: dict):
     try:
         data = json.dumps(payload).encode()
         req  = urllib.request.Request(
@@ -380,18 +574,35 @@ def send_slack(issues: list[str], severity: str, analysis: str | None, m: dict):
 def lambda_handler(event, context):
     print("[INFO] GPU 모니터링 에이전트 시작")
 
-    m              = collect()
-    issues, sev    = detect(m)
+    # 1. 메트릭 수집 및 이상 감지
+    m           = collect()
+    issues, sev = detect(m)
     print(f"[INFO] severity={sev}, issues={len(issues)}")
 
+    # 2. Loki 에러 로그 수집 (항상)
+    log_lines = query_loki_errors()
+    print(f"[INFO] error_logs={len(log_lines)}")
+
+    bedrock_called = False
+
+    # 3. 메트릭 이상 시 → 메트릭 + 동시점 로그 통합 분석
     if sev in ("WARNING", "CRITICAL"):
-        analysis = call_bedrock(build_prompt(m, issues))
-        send_slack(issues, sev, analysis, m)
-    else:
-        print("[INFO] 정상 범위 — Bedrock 호출 생략")
+        analysis = call_bedrock(build_metric_prompt(m, issues, log_lines))
+        send_slack_metric(issues, sev, analysis, m)
+        bedrock_called = True
+
+    # 4. 메트릭 정상이지만 에러 로그 있을 때 → 로그 단독 분석
+    elif log_lines:
+        log_analysis = call_bedrock(build_log_prompt(log_lines))
+        send_slack_log(log_lines, log_analysis)
+        bedrock_called = True
+
+    if not bedrock_called:
+        print("[INFO] 정상 범위 — 알림 생략")
 
     return {
-        "severity":       sev,
-        "issue_count":    len(issues),
-        "bedrock_called": sev != "NORMAL",
+        "severity":     sev,
+        "issue_count":  len(issues),
+        "error_logs":   len(log_lines),
+        "bedrock_called": bedrock_called,
     }
