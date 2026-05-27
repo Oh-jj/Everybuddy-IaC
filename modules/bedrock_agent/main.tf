@@ -46,7 +46,7 @@ resource "aws_lambda_function" "gpu_monitor" {
     variables = {
       PROMETHEUS_ENDPOINT = "http://${var.prometheus_private_ip}:9090"
       SLACK_WEBHOOK_SSM   = aws_ssm_parameter.slack_webhook.name
-      BEDROCK_MODEL_ID    = "anthropic.claude-3-5-haiku-20241022-v1:0"
+      BEDROCK_MODEL_ID    = "anthropic.claude-3-5-sonnet-20241022-v2:0"
       BEDROCK_REGION      = var.aws_region
     }
   }

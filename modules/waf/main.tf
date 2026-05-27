@@ -59,6 +59,7 @@ resource "aws_wafv2_web_acl" "main" {
   # ── Rule 2: 바이너리 업로드 엔드포인트 허용 (CommonRuleSet false positive 우회) ──
   # /api/v1/translate/speech : m4a 파일 업로드 (8KB 초과)
   # /api/v1/translate/text   : 긴 텍스트 번역 (최대 ~100KB)
+  # /api/v1/translate/video  : 영상 파일 업로드 (최대 50MB)
   # /api/v1/users/me         : 프로필 이미지 업로드 (JPEG/PNG 바이너리 false positive)
   # /api/v1/messages         : 채팅 파일 전송 (이미지, 비디오, 오디오, 문서 바이너리 false positive)
   rule {
@@ -87,6 +88,19 @@ resource "aws_wafv2_web_acl" "main" {
         statement {
           byte_match_statement {
             search_string = "/api/v1/translate/text"
+            field_to_match {
+              uri_path {}
+            }
+            text_transformation {
+              priority = 0
+              type     = "NONE"
+            }
+            positional_constraint = "STARTS_WITH"
+          }
+        }
+        statement {
+          byte_match_statement {
+            search_string = "/api/v1/translate/video"
             field_to_match {
               uri_path {}
             }
