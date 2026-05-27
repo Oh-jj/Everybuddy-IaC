@@ -304,19 +304,8 @@ def detect(m: dict) -> tuple[list[str], str]:
         )
         bump("CRITICAL")
 
-    # Triton 메트릭 소실 — 서버 다운 또는 재시작 중
-    if not m.get("triton", {}).get("available", True):
-        # VRAM이 정상 범위(>1GB)인 GPU가 없으면 Triton이 진짜 다운된 것으로 판단
-        any_vram_loaded = any(
-            v.get("used", 0) > 1000
-            for v in m.get("vrams", {}).values()
-        )
-        if not any_vram_loaded:
-            issues.append("🔴 Triton 서버 다운 — 메트릭 없음 + VRAM 비어 있음 (컨테이너 재시작 중)")
-            bump("CRITICAL")
-        else:
-            issues.append("⚠️ Triton 서버 메트릭 없음 — 재시작 중 또는 스크래핑 오류")
-            bump("WARNING")
+    # Triton 메트릭(포트 8002)은 네트워크 팀 포트 미개방으로 수집 불가 — 트리거에서 제외
+    # 포트 개방 후 collect()에서 triton 데이터가 수집되면 프롬프트 컨텍스트로만 활용됨
 
     return issues, severity
 
