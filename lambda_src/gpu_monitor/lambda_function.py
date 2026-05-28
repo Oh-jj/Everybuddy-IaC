@@ -5,6 +5,7 @@ EventBridge 2분 주기 → Prometheus/Loki 조회 → 이상 감지 → Bedrock
 import json
 import os
 import re
+import hashlib
 import boto3
 import urllib.request
 import urllib.parse
@@ -36,6 +37,43 @@ ssm     = boto3.client("ssm",             region_name=BEDROCK_REGION)
 bedrock = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 
 _slack_url_cache: str | None = None
+
+# ── 전역변수 쿨다운 (warm start 활용, IAM 불필요) ─────────────────────────────
+COOLDOWN_MINUTES = 30
+_last_alert_hash: str | None = None
+_last_alert_time: float | None = None  # UTC timestamp
+
+
+def _issue_hash(issues: list[str]) -> str:
+    return hashlib.md5("|".join(sorted(issues)).encode()).hexdigest()[:8]
+
+
+def check_cooldown(issues: list[str]) -> tuple[bool, int]:
+    """
+    Returns (should_alert, suppressed_count)
+    - should_alert: True면 알림 전송
+    - suppressed_count: 이번 쿨다운 사이클에서 억제된 횟수 (재알림 시 표시용)
+    """
+    global _last_alert_hash, _last_alert_time
+
+    if not issues:
+        _last_alert_hash = None
+        _last_alert_time = None
+        return False, 0
+
+    h   = _issue_hash(issues)
+    now = datetime.now(timezone.utc).timestamp()
+
+    if _last_alert_hash == h and _last_alert_time is not None:
+        elapsed = (now - _last_alert_time) / 60
+        if elapsed < COOLDOWN_MINUTES:
+            print(f"[INFO] 쿨다운 중 알림 억제 (동일 이슈, 경과 {elapsed:.0f}분/{COOLDOWN_MINUTES}분)")
+            return False, 0
+
+    # 새 이슈 또는 쿨다운 만료 → 알림 전송
+    _last_alert_hash = h
+    _last_alert_time = now
+    return True, 0
 
 
 def get_slack_url() -> str:
@@ -117,11 +155,11 @@ def query_loki_errors(minutes: int = 2, limit: int = 50) -> list[str]:
         now_ns   = int(datetime.now(timezone.utc).timestamp() * 1e9)
         start_ns = now_ns - int(minutes * 60 * 1e9)
 
-        # Triton 컨테이너 재시작/크래시 패턴 포함
+        # Triton 컨테이너 로그만 조회 (service_name 레이블 기준)
         query = (
-            '{job=~".+"} |~ '
+            '{service_name="triton"} |~ '
             '"(?i)(error|critical|fatal|exception|oom|killed|traceback|panic|cuda|segfault'
-            '|failed to load|failed to create|server.*failed|restarting)"'
+            '|failed to load|failed to create|server.*failed|restarting|failed)"'
         )
         params = urllib.parse.urlencode({
             "query":     query,
@@ -574,19 +612,24 @@ def lambda_handler(event, context):
 
     bedrock_called = False
 
-    # 3. 메트릭 이상 시 → 메트릭 + 동시점 로그 통합 분석
+    # 3. 메트릭 이상 시 → 쿨다운 확인 후 Bedrock 분석 + Slack
     if sev in ("WARNING", "CRITICAL"):
-        analysis = call_bedrock(build_metric_prompt(m, issues, log_lines))
-        send_slack_metric(issues, sev, analysis, m)
-        bedrock_called = True
+        should_alert, _ = check_cooldown(issues)
+        if should_alert:
+            analysis = call_bedrock(build_metric_prompt(m, issues, log_lines))
+            send_slack_metric(issues, sev, analysis, m)
+            bedrock_called = True
 
-    # 4. 메트릭 정상이지만 에러 로그 있을 때 → 로그 단독 분석
+    # 4. 메트릭 정상이지만 에러 로그 있을 때 → 로그 단독 분석 (에러 로그는 쿨다운 미적용)
     elif log_lines:
+        check_cooldown([])  # 메트릭 정상이면 상태 초기화
         log_analysis = call_bedrock(build_log_prompt(log_lines))
         send_slack_log(log_lines, log_analysis)
         bedrock_called = True
 
-    if not bedrock_called:
+    # 5. 완전 정상 → 상태 초기화
+    if sev == "NORMAL" and not log_lines:
+        check_cooldown([])
         print("[INFO] 정상 범위 — 알림 생략")
 
     return {
