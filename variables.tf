@@ -97,5 +97,5 @@ variable "existing_role_arn" {
 variable "datalake_bucket_suffix" {
   description = "Data Lake S3 버킷명 중복 방지용 suffix (예: 계정ID 앞 6자리)"
   type        = string
-  default     = "710585"
+  # 실행 전: export TF_VAR_datalake_bucket_suffix="710585"
 }

@@ -7,14 +7,6 @@ resource "aws_s3_bucket" "datalake" {
   }
 }
 
-resource "aws_s3_bucket_versioning" "datalake" {
-  bucket = aws_s3_bucket.datalake.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
 resource "aws_s3_bucket_public_access_block" "datalake" {
   bucket = aws_s3_bucket.datalake.id
 
