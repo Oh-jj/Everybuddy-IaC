@@ -91,11 +91,11 @@ variable "slack_webhook_url" {
 variable "existing_role_arn" {
   description = "관리자가 사전 생성한 Lambda 실행 IAM Role ARN"
   type        = string
-  # 실행 전: export TF_VAR_existing_role_arn="arn:aws:iam::710585551723:role/everybuddy-gpu-monitor-role"
+  # 실행 전: export TF_VAR_existing_role_arn="arn:aws:iam::<ACCOUNT_ID>:role/everybuddy-gpu-monitor-role"
 }
 
 variable "datalake_bucket_suffix" {
   description = "Data Lake S3 버킷명 중복 방지용 suffix (예: 계정ID 앞 6자리)"
   type        = string
-  # 실행 전: export TF_VAR_datalake_bucket_suffix="710585"
+  # 실행 전: export TF_VAR_datalake_bucket_suffix="<고유값>"
 }
