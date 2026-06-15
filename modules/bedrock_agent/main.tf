@@ -44,11 +44,12 @@ resource "aws_lambda_function" "gpu_monitor" {
 
   environment {
     variables = {
-      PROMETHEUS_ENDPOINT = "http://${var.prometheus_private_ip}:9090"
-      LOKI_ENDPOINT       = "http://${var.prometheus_private_ip}:3100"
-      SLACK_WEBHOOK_SSM   = aws_ssm_parameter.slack_webhook.name
-      BEDROCK_MODEL_ID    = "anthropic.claude-3-5-sonnet-20240620-v1:0"
-      BEDROCK_REGION      = var.aws_region
+      PROMETHEUS_ENDPOINT  = "http://${var.prometheus_private_ip}:9090"
+      LOKI_ENDPOINT        = "http://${var.prometheus_private_ip}:3100"
+      SLACK_WEBHOOK_SSM    = aws_ssm_parameter.slack_webhook.name
+      BEDROCK_MODEL_ID     = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+      BEDROCK_REGION       = var.aws_region
+      DATALAKE_BUCKET      = var.datalake_bucket_name
     }
   }
 

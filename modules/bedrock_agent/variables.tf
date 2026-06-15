@@ -34,3 +34,8 @@ variable "lambda_sg_id" {
   description = "Lambda 함수용 Security Group ID"
   type        = string
 }
+
+variable "datalake_bucket_name" {
+  description = "에러 이력을 저장할 Data Lake S3 버킷명"
+  type        = string
+}

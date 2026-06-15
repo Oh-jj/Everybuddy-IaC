@@ -4,11 +4,11 @@ AWS 기반 everybuddy 서비스 인프라를 Terraform으로 관리하는 레포
 
 ---
 
-## 최신 패치 — v3.2.0
+## 최신 패치 — v3.3.0
 
-**날짜:** 2026-05-29 · **브랜치:** `dev`
+**날짜:** 2026-06-15 · **브랜치:** `dev`
 
-🤖 Bedrock GPU 모니터링 에이전트 고도화 — Loki 로그 수집 연동 · Cooldown 로직 추가 · Triton 메트릭 오탐 트리거 제거
+🗄️ S3 Data Lake 도입 — GPU 에러 이력 구조화 저장 (Athena 쿼리 가능한 파티션 구조)
 
 > 전체 변경 이력은 [docs/](./docs/) 참고
 
@@ -127,10 +127,11 @@ AWS 기반 everybuddy 서비스 인프라를 Terraform으로 관리하는 레포
 
 ### S3
 
-| 버킷                       | 용도                           |
-| -------------------------- | ------------------------------ |
-| everybuddy-files (prod)    | 파일 업로드/다운로드 스토리지  |
-| everybuddy-terraform-state | Terraform Remote Backend State |
+| 버킷                         | 용도                           |
+| ---------------------------- | ------------------------------ |
+| everybuddy-files (prod)      | 파일 업로드/다운로드 스토리지  |
+| everybuddy-terraform-state   | Terraform Remote Backend State |
+| everybuddy-datalake-{suffix} | GPU 에러 이력 Data Lake        |
 
 ---
 
@@ -145,7 +146,9 @@ modules/
 ├── database/     # RDS, DB Subnet Group
 ├── dns/          # Route53 Hosted Zone
 ├── alb/          # ALB, ACM, Target Group, Listeners, Route53 A Record
-└── waf/          # WAF v2 (IP Reputation, AllowTranslate, CommonRuleSet, KnownBadInputs)
+├── waf/          # WAF v2 (IP Reputation, AllowTranslate, CommonRuleSet, KnownBadInputs)
+├── bedrock_agent/ # Lambda GPU 모니터링 에이전트 (Bedrock + Prometheus + Loki)
+└── datalake/     # S3 Data Lake (GPU 에러 이력 저장)
 ```
 
 ---
@@ -168,6 +171,7 @@ Push to main
 
 | 버전                         | 날짜       | 내용                                          |
 | ---------------------------- | ---------- | --------------------------------------------- |
+| [v3.3.0](./docs/v3.3.0.md)   | 2026-06-15 | S3 Data Lake 도입 (GPU 에러 이력 저장)                       |
 | [v3.2.0](./docs/v3.2.0.md)   | 2026-05-29 | Bedrock 에이전트 고도화 (Loki 연동 · Cooldown · 트리거 정제) |
 | [v3.1.0](./docs/v3.1.0.md)   | 2026-05-27 | Bedrock GPU 모니터링 에이전트 도입 + WAF 영상 업로드 허용 |
 | [v3.0.0](./docs/v3.0.0.md)   | 2026-05-18 | WAF 업로드 허용 확장 + Bastion → RDS 접근 허용 |

@@ -159,6 +159,17 @@ module "waf" {
 }
 
 # ============================================================
+# Data Lake
+# laurel GPU 에러 이력 저장 (S3)
+# ============================================================
+module "datalake" {
+  source          = "./modules/datalake"
+  project_name    = var.project_name
+  suffix          = var.datalake_bucket_suffix
+  lambda_role_arn = var.existing_role_arn
+}
+
+# ============================================================
 # Bedrock Agent
 # laurel GPU 서버 이상 감지 → Bedrock 분석 → Slack 알림
 # ============================================================
@@ -172,8 +183,9 @@ module "bedrock_agent" {
   prometheus_private_ip = module.compute.monitoring_private_ip
 
   # private-app-a 서브넷 (NAT GW 연결 — Bedrock/Slack outbound 가능)
-  private_subnet_ids = [module.networking.private_app_subnet_ids["a"]]
-  lambda_sg_id       = module.security.lambda_gpu_monitor_sg_id
+  private_subnet_ids   = [module.networking.private_app_subnet_ids["a"]]
+  lambda_sg_id         = module.security.lambda_gpu_monitor_sg_id
+  datalake_bucket_name = module.datalake.bucket_name
 }
 
 # Lambda → 모니터링 서버 Loki(3100) 허용
