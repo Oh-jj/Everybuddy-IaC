@@ -93,3 +93,9 @@ variable "existing_role_arn" {
   type        = string
   # 실행 전: export TF_VAR_existing_role_arn="arn:aws:iam::710585551723:role/everybuddy-gpu-monitor-role"
 }
+
+variable "datalake_bucket_suffix" {
+  description = "Data Lake S3 버킷명 중복 방지용 suffix (예: 계정ID 앞 6자리)"
+  type        = string
+  default     = "710585"
+}

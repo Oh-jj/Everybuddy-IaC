@@ -18,7 +18,8 @@ SLACK_WEBHOOK_SSM   = os.environ["SLACK_WEBHOOK_SSM"]
 BEDROCK_MODEL_ID    = os.environ.get(
     "BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20240620-v1:0"
 )
-BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "ap-southeast-1")
+BEDROCK_REGION   = os.environ.get("BEDROCK_REGION", "ap-southeast-1")
+DATALAKE_BUCKET  = os.environ.get("DATALAKE_BUCKET", "")
 
 # ── 임계값 ────────────────────────────────────────────────────────────────────
 THRESHOLDS = {
@@ -35,6 +36,7 @@ THRESHOLDS = {
 # ── AWS 클라이언트 ────────────────────────────────────────────────────────────
 ssm     = boto3.client("ssm",             region_name=BEDROCK_REGION)
 bedrock = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
+s3      = boto3.client("s3",              region_name=BEDROCK_REGION)
 
 _slack_url_cache: str | None = None
 
@@ -597,6 +599,52 @@ def _post_slack(payload: dict):
         print(f"[ERROR] Slack 전송 실패: {e}")
 
 
+# ── Data Lake 저장 ────────────────────────────────────────────────────────────
+def save_to_datalake(
+    severity: str,
+    issues: list[str],
+    log_lines: list[str],
+    metrics: dict,
+    analysis: str | None,
+):
+    if not DATALAKE_BUCKET:
+        return
+
+    now = datetime.now(timezone.utc)
+    record = {
+        "timestamp":       now.isoformat(),
+        "severity":        severity,
+        "issues":          issues,
+        "loki_errors":     log_lines,
+        "metrics_snapshot": {
+            "temps":  {gid: td.get("current") for gid, td in metrics.get("temps", {}).items()},
+            "utils":  metrics.get("utils", {}),
+            "vrams":  {gid: v.get("pct") for gid, v in metrics.get("vrams", {}).items()},
+            "powers": metrics.get("powers", {}),
+        },
+        "bedrock_analysis": analysis,
+    }
+
+    key = (
+        f"laurel-errors/"
+        f"year={now.strftime('%Y')}/"
+        f"month={now.strftime('%m')}/"
+        f"day={now.strftime('%d')}/"
+        f"{int(now.timestamp())}_{severity}.json"
+    )
+
+    try:
+        s3.put_object(
+            Bucket=DATALAKE_BUCKET,
+            Key=key,
+            Body=json.dumps(record, ensure_ascii=False),
+            ContentType="application/json",
+        )
+        print(f"[INFO] Data Lake 저장 완료: s3://{DATALAKE_BUCKET}/{key}")
+    except Exception as e:
+        print(f"[ERROR] Data Lake 저장 실패: {e}")
+
+
 # ── Lambda 핸들러 ─────────────────────────────────────────────────────────────
 def lambda_handler(event, context):
     print("[INFO] GPU 모니터링 에이전트 시작")
@@ -612,19 +660,21 @@ def lambda_handler(event, context):
 
     bedrock_called = False
 
-    # 3. 메트릭 이상 시 → 쿨다운 확인 후 Bedrock 분석 + Slack
+    # 3. 메트릭 이상 시 → 쿨다운 확인 후 Bedrock 분석 + Slack + Data Lake 저장
     if sev in ("WARNING", "CRITICAL"):
         should_alert, _ = check_cooldown(issues)
         if should_alert:
             analysis = call_bedrock(build_metric_prompt(m, issues, log_lines))
             send_slack_metric(issues, sev, analysis, m)
+            save_to_datalake(sev, issues, log_lines, m, analysis)
             bedrock_called = True
 
-    # 4. 메트릭 정상이지만 에러 로그 있을 때 → 로그 단독 분석 (에러 로그는 쿨다운 미적용)
+    # 4. 메트릭 정상이지만 에러 로그 있을 때 → 로그 단독 분석 + Data Lake 저장 (쿨다운 미적용)
     elif log_lines:
         check_cooldown([])  # 메트릭 정상이면 상태 초기화
         log_analysis = call_bedrock(build_log_prompt(log_lines))
         send_slack_log(log_lines, log_analysis)
+        save_to_datalake("LOG_ONLY", [], log_lines, m, log_analysis)
         bedrock_called = True
 
     # 5. 완전 정상 → 상태 초기화
