@@ -4,134 +4,19 @@ AWS 기반 everybuddy 서비스 인프라를 Terraform으로 관리하는 레포
 
 ---
 
-## 최신 패치 — v3.3.0
+![everybuddy Architecture](./docs/images/architecture.png)
 
-**날짜:** 2026-06-15 · **브랜치:** `dev`
+## 프로젝트 소개
 
-🗄️ S3 Data Lake 도입 — GPU 에러 이력 구조화 저장 (Athena 쿼리 가능한 파티션 구조)
+everybuddy는 글로벌 음성/채팅 번역 메신저 서비스로, 클라우드 인프라 전 영역을 Terraform으로 코드화하여 관리합니다. Spring Boot 백엔드와 RDS를 Private 서브넷에 격리하고 ALB·WAF로만 외부에 노출시키는 구조를 갖췄으며, 별도의 GPU 추론 서버(Nvidia Triton)를 Bedrock 기반 에이전트가 자동으로 모니터링하도록 구성했습니다. Grafana·Prometheus·Loki로 애플리케이션과 GPU 서버의 로그·지표를 한 곳에서 관측하고, GitHub Actions와 Bastion을 경유한 CI/CD 파이프라인으로 배포까지 자동화한 것이 특징입니다.
 
-> 전체 변경 이력은 [docs/](./docs/) 참고
+## 아키텍처 흐름
 
----
-
-## 인프라 구조
-
-**Provider:** AWS ap-southeast-1 (Singapore)
-**도메인:** everybuddy.cloud
-
-```
-                        인터넷
-                          │
-              ┌───────────┴───────────┐
-              │                       │
-        HTTPS (443)              SSH (22)
-              │                       │
-              ▼                       ▼
-   ┌─────────────────┐    ┌─────────────────────┐
-   │   ALB            │    │  Bastion EC2         │
-   │  everybuddy-alb  │    │  public-b / AZ-b     │
-   │  (internet-facing│    │                      │
-   │   AZ-a + AZ-b)  │    │  t3.micro            │
-   └────────┬────────┘    └──────────┬──────────┘
-            │                        │
-     HTTP:8080                 SSH ProxyJump
-            │                        │
-            ▼                        ▼
-   ┌──────────────────────────────────────────┐
-   │         Private App Subnet               │
-   │         10.0.11.0/24 (AZ-a)             │
-   │                                          │
-   │   EC2 everybuddy-private-backend         │
-   │   t3.medium                             │
-   │   Spring Boot :8080                      │
-   │   Node Exporter :9100                    │
-   │   Promtail → Loki                        │
-   └───────────┬──────────────────────────────┘
-               │
-        ┌──────┴──────┐
-        │             │
-    MySQL:3306    NAT GW → 인터넷
-        │         (DockerHub, Firebase)
-        │
-    S3 Endpoint → S3 (무료, NAT GW 우회)
-        ▼
-   ┌──────────────────────────┐
-   │  Private DB Subnet       │
-   │  10.0.21.0/24 (AZ-a)    │
-   │                          │
-   │  RDS everybuddy-mysql    │
-   │  MySQL 8.0 / db.t3.micro │
-   └──────────────────────────┘
-
-
-   ┌──────────────────────────────────┐
-   │  Public Subnet 10.0.2.0/24 (AZ-a)│
-   │                                  │
-   │  EC2 everybuddy-monitoring        │
-   │  t3.micro                        │
-   │  ├── Grafana      :3000          │
-   │  ├── Prometheus   :9090          │
-   │  └── Loki         :3100          │
-   └──────────────┬───────────────────┘
-                  │ ▲ Loki :3100
-                  │ │ (Promtail 로그 푸시)
-   ┌──────────────┴───────────────────┐
-   │  외부 GPU 서버 (laurel)           │
-   │  Promtail → 로그 수집            │
-   └──────────────────────────────────┘
-```
-
----
-
-## 리소스 목록
-
-### EC2
-
-| 이름                       | 타입     | IP      | 서브넷            | 역할                         |
-| -------------------------- | -------- | ------- | ----------------- | ---------------------------- |
-| everybuddy-private-backend | t3.medium | private | private-app-a     | Spring Boot API 서버         |
-| everybuddy-monitoring      | t3.micro  | public  | public-monitoring | Grafana / Prometheus / Loki  |
-| everybuddy-bastion         | t3.micro  | public  | public-b          | SSH 접근 및 CI/CD 게이트웨이 |
-
-### 네트워크
-
-| 리소스                     | 이름           | CIDR / 값           |
-| -------------------------- | -------------- | ------------------- |
-| VPC                        | everybuddy-vpc | 10.0.0.0/16         |
-| Subnet (public-backend)    | -              | 10.0.1.0/24, AZ-a   |
-| Subnet (public-monitoring) | -              | 10.0.2.0/24, AZ-a   |
-| Subnet (public-b)          | -              | 10.0.3.0/24, AZ-b   |
-| Subnet (private-app-a)     | -              | 10.0.11.0/24, AZ-a  |
-| Subnet (private-app-b)     | -              | 10.0.12.0/24, AZ-b  |
-| Subnet (private-db-a)      | -              | 10.0.21.0/24, AZ-a  |
-| Subnet (private-db-b)      | -              | 10.0.22.0/24, AZ-b  |
-| NAT Gateway                | -              | public-backend AZ-a |
-
-### ALB / DNS / 인증서
-
-| 리소스       | 값                                            |
-| ------------ | --------------------------------------------- |
-| ALB          | everybuddy-alb (internet-facing, AZ-a + AZ-b) |
-| 도메인       | api.everybuddy.cloud → ALB Alias              |
-| ACM          | everybuddy.cloud (ISSUED)                     |
-| Route53 Zone | everybuddy.cloud                              |
-
-### RDS
-
-| 항목       | 값                  |
-| ---------- | ------------------- |
-| Identifier | everybuddy-mysql    |
-| Engine     | MySQL 8.0           |
-| Class      | db.t3.micro         |
-| Subnet     | private-db-a (AZ-a) |
-
-### S3
-
-| 버킷                         | 용도                           |
-| ---------------------------- | ------------------------------ |
-| everybuddy-files (prod)      | 파일 업로드/다운로드 스토리지  |
-| everybuddy-terraform-state   | Terraform Remote Backend State |
-| everybuddy-datalake-{suffix} | GPU 에러 이력 Data Lake        |
+- **사용자 요청 경로**: Android 앱 사용자 → WAF → ALB → Private 서브넷의 Spring 서버 → RDS
+- **외부 연동**: 파일 업로드/다운로드는 VPC Endpoint를 통해 NAT GW 우회로 S3에 접근하고, Firebase 실시간 동기화 등은 NAT GW를 통해 아웃바운드로 연결
+- **운영 접근**: 관리자는 Bastion EC2를 거쳐 Private 백엔드에 SSH로 접근하며, GitHub Actions 배포도 동일하게 Bastion ProxyJump를 경유
+- **모니터링**: 모니터링 서버가 백엔드·GPU 서버의 로그/지표를 Promtail·Prometheus로 수집해 Grafana로 시각화
+- **Agent 자동 대응**: EventBridge가 주기적으로 Lambda를 트리거 → Bedrock 에이전트가 모니터링 지표를 분석해 GPU 서버 이상을 감지 → Slack/GitHub(Developer tools)로 알림 및 조치가 GPU 서버의 Scheduler로 전달되어 GPU 0~3에 분산된 Triton 추론 서비스에 반영
 
 ---
 
@@ -164,6 +49,118 @@ Push to main
         ├── SCP docker-compose.yml → Bastion → Private Backend
         └── SSH → Bastion → Private Backend → docker compose up -d
 ```
+
+---
+
+## 핵심 설계 사항
+
+###  1. 온프레미스 GPU 서버(V100×4) 기반 LLM 모델 서빙 인프라 운영 환경 구성
+
+CPU/GPU 인스턴스 분리 배치, 다중 모델(번역·TTS) 동시 서빙, Triton Inference Server - Spring Boot 연동
+
+```
+Thu May xx xx:xx:xx 2026
++---------------------------------------------------------------------------------------+
+| NVIDIA-SMI 535.161.07             Driver Version: 535.161.07   CUDA Version: 12.2     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |               MIG M. |
+|=========================================+======================+======================|
+|   0  Tesla V100-DGXS-32GB           On  | 00000000:XX:00.0 Off |                    0 |
+| N/A   46C    P0              53W / 300W |  16143MiB / 32768MiB |      0%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+|   1  Tesla V100-DGXS-32GB           On  | 00000000:XX:00.0 Off |                    0 |
+| N/A   51C    P0              55W / 300W |  16121MiB / 32768MiB |      0%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+|   2  Tesla V100-DGXS-32GB           On  | 00000000:XX:00.0 Off |                    0 |
+| N/A   47C    P0              52W / 300W |  16121MiB / 32768MiB |      0%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+|   3  Tesla V100-DGXS-32GB           On  | 00000000:XX:00.0 Off |                    0 |
+| N/A   46C    P0              53W / 300W |  16121MiB / 32768MiB |      0%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+```
+
+**1. 멀티 모델 GPU 리소스 배치**
+
+| 구분 | 내용 |
+| ---- | ---- |
+| 상황 | V100 32GB×4 위에 번역 모델 3종(gemma_s2tt / t2tt / v2tt)과 TTS 모델을 동시 서빙해야 함 |
+| 판단·근거 | gemma_s2tt는 GPU 0/1에 2개 인스턴스, gemma_t2tt는 GPU 2/3에 2개 인스턴스로 분산해 특정 GPU에 부하가 몰리지 않게 배치. TTS(Supertonic)는 연산량이 가벼워 KIND_CPU로 지정해 굳이 GPU를 점유하지 않도록 분리 |
+| 결과 | GPU 자원을 모델 특성(연산 강도)에 맞게 차등 배분해 4장으로 4종 모델을 동시 운영 |
+
+**2. 온프레미스-AWS 하이브리드 네트워크 연동**
+
+| 구분 | 내용 |
+| ---- | ---- |
+| 상황 | laurel(사내 온프레미스 GPU 서버)이 AWS VPC 외부에 있어 Spring 백엔드가 직접 호출 불가, 사내 방화벽이 인바운드를 차단 |
+| 판단·근거 | SSH 리버스 터널(autossh) vs 회사에 포트 개방 요청, 두 방식을 비교해 운영 복잡도가 낮은 포트 개방을 우선 요청하고 터널은 폴백으로만 준비. 승인 후에는 용도별로 소스 IP를 분리(API 트래픽은 NAT Gateway IP, 모니터링 트래픽은 별도 모니터링 서버 IP로 화이트리스트) |
+| 결과 | 트래픽 목적별 접근 통제를 갖춘 하이브리드 연동 구조 확립 |
+
+**3. 신규 모델 통합 시 의존성 충돌 해결**
+
+| 구분 | 내용 |
+| ---- | ---- |
+| 상황 | TTS 기능 추가 시 처음 검토한 GPT-SoVITS 라이브러리의 transformers 버전 요구사항이 기존 Gemma-4 모델이 필요로 하는 버전과 충돌 |
+| 판단·근거 | 동일 컨테이너에 억지로 우겨넣지 않고 별도 컨테이너/프로세스로 분리하는 방안을 먼저 검토했다가, 최종적으로는 의존성 충돌이 없는 경량 TTS 라이브러리(Supertonic)로 대체해 기존 Triton 컨테이너 안에 CPU 인스턴스로 안전하게 통합 |
+| 결과 | 기존 서빙 환경(Gemma 계열)을 건드리지 않고 신규 모델을 추가하는 의존성 관리 판단 경험 |
+
+
+
+
+> 온프레미스 서버는 AWS 콘솔·CloudWatch 관측 범위 밖에 있어 이상 발생 시 수동으로 확인하기 전까지 파악이 어려움이 있다고 판단
+
+---
+
+###  2. AWS Bedrock을 활용한 GPU 서버 관제 및 이슈 감지 시 Slack 알림·해결 방안 제공 Agent 설계
+
+Lambda+EventBridge 서버리스, 이상 감지 시 Bedrock 호출·Slack 알림, 반복 오탐 쿨다운 로직 개선
+
+<details>
+<summary>실제 동작 스크린샷</summary>
+
+![GPU 이상 감지 및 Bedrock 분석 알림 1](./docs/images/triton1.png)
+![GPU 이상 감지 및 Bedrock 분석 알림 2](./docs/images/triton2.png)
+
+</details>
+
+**1. 설계 이유**
+
+| 구분 | 내용 |
+| ---- | ---- |
+| 상황 | GPU 서버(laurel)가 관리 중인 AWS 클라우드 환경과 물리적으로 분리된 온프레미스 환경에 위치해 별도 관리 필요. 번역 메신저 서비스 특성상 번역 모델의 안정적 구동이 핵심 기능이라 관리 우선순위가 높다고 판단 |
+| 판단·근거 | 단순 임계값 알림이 아닌, 메트릭·로그·GPU 온도·메모리 할당량까지 종합 분석해 이상 여부와 해결 방안까지 제시하는 Bedrock + Lambda + EventBridge(2분 주기 트리거) 구조로 설계 |
+| 결과 | 이벤트 기반 서버리스 감시 체계 아키텍처 확립 |
+
+**2. 모델 선택과 비용 최적화**
+
+| 구분 | 내용 |
+| ---- | ---- |
+| 상황 | Bedrock에서 어떤 Claude 모델을 호출할지 결정 필요 |
+| 판단·근거 | Claude 3 Haiku(구형)와 Claude 3.5 Sonnet($3/$15 per M 토큰, 로그 분석용으로는 과스펙)을 비교해 Claude 3.5 Haiku($0.80/$4.00 per M 토큰)를 비용 대비 효율로 선택. 완전 자동 복구(Bedrock Agent Action Groups)는 신뢰성이 검증되지 않은 상태에서 자동 액션을 실행하는 리스크가 크다고 판단해 1차 범위는 "알림·해결방안 제시"까지로 제한 |
+| 결과 | 평시 월 $0.6-1.2, 장애 폭증 시에도 최대 약 $13(전체 인프라 비용의 1-4% 수준)로 비용 통제 |
+
+**3. 실배포 및 운영 검증**
+
+| 구분 | 내용 |
+| ---- | ---- |
+| 상황 | 설계에 그치지 않고 실제 Lambda 함수(everybuddy-gpu-monitor)로 배포 |
+| 판단·근거 | aws lambda invoke로 실행해 런타임 에러(코드 문법 오류)를 실제로 잡아 수정. 이후 정상 실행 결과(severity: NORMAL)를 확인하고, 실제 Slack으로 "[GPU 모니터] laurel 이상 감지 — WARNING" 메시지가 GPU 온도·VRAM 수치와 함께 수신되는 것까지 검증 |
+| 결과 | 설계 문서로 끝나지 않고 실제 배포·실행·알림까지 엔드투엔드로 동작 확인 |
+
+---
+
+## 최신 패치 — v3.3.0
+
+**날짜:** 2026-06-15 · **브랜치:** `dev`
+
+🗄️ S3 Data Lake 도입 — GPU 에러 이력 구조화 저장 (Athena 쿼리 가능한 파티션 구조)
+
+> 전체 변경 이력은 [docs/](./docs/) 참고
 
 ---
 
