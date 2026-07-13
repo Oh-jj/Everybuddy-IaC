@@ -154,6 +154,18 @@ Lambda+EventBridge 서버리스, 이상 감지 시 Bedrock 호출·Slack 알림,
 
 ---
 
+## 트러블슈팅
+
+### AWS WAF 오탐으로 인한 정상 트래픽 차단
+
+[docs/error/waf-false-positive.md](./docs/error/waf-false-positive.md)
+
+### 관제 에이전트 알림 신뢰도(Signal-to-Noise) 개선
+
+[docs/error/agent-signal-to-noise.md](./docs/error/agent-signal-to-noise.md)
+
+---
+
 ## 최신 패치 — v3.3.0
 
 **날짜:** 2026-06-15 · **브랜치:** `dev`
